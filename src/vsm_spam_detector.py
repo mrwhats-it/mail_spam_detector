@@ -31,6 +31,14 @@ class Metrics:
     confusion_matrix: np.ndarray
 
 
+@dataclass
+class VSMModel:
+    vocab: Dict[str, int]
+    idf: np.ndarray
+    spam_centroid: np.ndarray
+    ham_centroid: np.ndarray
+
+
 def tokenize(text: str) -> List[str]:
     return TOKEN_PATTERN.findall(text.lower())
 
@@ -174,6 +182,26 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> Metrics:
     return Metrics(accuracy=accuracy, precision=precision, recall=recall, f1=f1, confusion_matrix=cm)
 
 
+def stable_softmax(logits: np.ndarray) -> np.ndarray:
+    shifted = logits - np.max(logits)
+    exps = np.exp(shifted)
+    return exps / np.sum(exps)
+
+
+def predict_single_text(model: VSMModel, text: str, temperature: float = 5.0) -> Tuple[str, float, float, float]:
+    tokens = [tokenize(text)]
+    x = compute_tf_idf(tokens, model.vocab, model.idf)
+
+    spam_score = float((x @ model.spam_centroid)[0])
+    ham_score = float((x @ model.ham_centroid)[0])
+    probs = stable_softmax(np.array([ham_score * temperature, spam_score * temperature], dtype=np.float64))
+    p_ham, p_spam = float(probs[0]), float(probs[1])
+
+    if p_spam >= p_ham:
+        return "spam", p_spam, spam_score, ham_score
+    return "ham", p_ham, spam_score, ham_score
+
+
 def most_informative_terms(vocab: Dict[str, int], spam_centroid: np.ndarray, ham_centroid: np.ndarray, k: int = 10):
     inv_vocab = {i: term for term, i in vocab.items()}
     diff = spam_centroid - ham_centroid
@@ -185,7 +213,14 @@ def most_informative_terms(vocab: Dict[str, int], spam_centroid: np.ndarray, ham
     return top_spam, top_ham
 
 
-def run_experiment(data_path: str, test_ratio: float, min_df: int, seed: int) -> None:
+def run_experiment(
+    data_path: str,
+    test_ratio: float,
+    min_df: int,
+    seed: int,
+    input_text: str | None = None,
+    interactive: bool = False,
+) -> None:
     dataset = load_dataset(data_path)
     x_train_raw, y_train, x_test_raw, y_test = train_test_split(
         dataset.texts,
@@ -208,6 +243,7 @@ def run_experiment(data_path: str, test_ratio: float, min_df: int, seed: int) ->
     spam_centroid, ham_centroid = class_centroids(x_train, y_train)
     y_pred = predict(x_test, spam_centroid, ham_centroid)
     metrics = evaluate(y_test, y_pred)
+    model = VSMModel(vocab=vocab, idf=idf, spam_centroid=spam_centroid, ham_centroid=ham_centroid)
 
     top_spam, top_ham = most_informative_terms(vocab, spam_centroid, ham_centroid, k=8)
 
@@ -232,15 +268,65 @@ def run_experiment(data_path: str, test_ratio: float, min_df: int, seed: int) ->
     for term, score in top_ham:
         print(f"  {term:<16} {score:.4f}")
 
+    if input_text:
+        label, confidence, spam_score, ham_score = predict_single_text(model, input_text)
+        print()
+        print("Custom Input Prediction:")
+        print(f"Text      : {input_text}")
+        print(f"Prediction: {label}")
+        print(f"Confidence: {confidence:.4f}")
+        print(f"Spam score: {spam_score:.4f}")
+        print(f"Ham score : {ham_score:.4f}")
+
+    if interactive:
+        print()
+        print("Interactive mode (multiline).")
+        print("Enter/paste email lines, then type /send on a new line to classify.")
+        print("Type /quit to exit.")
+        buffer: List[str] = []
+        while True:
+            try:
+                prompt = "> " if not buffer else "... "
+                line = input(prompt)
+            except EOFError:
+                break
+            text = line.strip()
+            if text == "/quit":
+                break
+            if text == "/send":
+                full_text = "\n".join(buffer).strip()
+                if not full_text:
+                    print("No text provided. Paste email content first, then /send.")
+                    continue
+                label, confidence, spam_score, ham_score = predict_single_text(model, full_text)
+                print(
+                    f"prediction={label} confidence={confidence:.4f} "
+                    f"(spam_score={spam_score:.4f}, ham_score={ham_score:.4f})"
+                )
+                buffer = []
+                continue
+            buffer.append(line)
+
+        if buffer:
+            full_text = "\n".join(buffer).strip()
+            if full_text:
+                label, confidence, spam_score, ham_score = predict_single_text(model, full_text)
+                print(
+                    f"prediction={label} confidence={confidence:.4f} "
+                    f"(spam_score={spam_score:.4f}, ham_score={ham_score:.4f})"
+                )
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Spam Email Detection using Vector Space Model (TF-IDF + Cosine Similarity)"
     )
-    parser.add_argument("--data", default="data/emails.csv", help="Path to CSV dataset")
+    parser.add_argument("--data", default="data/email2.csv", help="Path to CSV dataset")
     parser.add_argument("--test-ratio", type=float, default=0.25, help="Test split ratio (0,1)")
     parser.add_argument("--min-df", type=int, default=1, help="Minimum document frequency")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--text", default=None, help="Single custom email text for prediction")
+    parser.add_argument("--interactive", action="store_true", help="Interactive custom text prediction mode")
     return parser.parse_args()
 
 
@@ -256,6 +342,8 @@ def main() -> None:
         test_ratio=args.test_ratio,
         min_df=args.min_df,
         seed=args.seed,
+        input_text=args.text,
+        interactive=args.interactive,
     )
 
 

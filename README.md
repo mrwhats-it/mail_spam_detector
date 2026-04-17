@@ -50,8 +50,20 @@ python3 src/vsm_spam_detector.py
 
 Optional arguments:
 ```bash
-python3 src/vsm_spam_detector.py --data data/emails.csv --test-ratio 0.25 --min-df 1 --seed 42
+python3 src/vsm_spam_detector.py --data data/email2.csv --test-ratio 0.25 --min-df 1 --seed 42
 ```
+
+Predict on your own single input text (while still printing dataset metrics):
+```bash
+python3 src/vsm_spam_detector.py --text "Urgent account verification required. Click now."
+```
+
+Interactive mode for multiple custom inputs:
+```bash
+python3 src/vsm_spam_detector.py --interactive
+```
+In interactive mode, paste full mail content line by line, then type `/send` on a new line to classify.  
+Type `/quit` to exit.
 
 ## Output
 The script prints:

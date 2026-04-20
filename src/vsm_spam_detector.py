@@ -40,6 +40,15 @@ class VSMModel:
 
 
 @dataclass
+class PCASVDReport:
+    k: int
+    singular_values: np.ndarray
+    explained_variance_ratio: np.ndarray
+    cumulative_variance_ratio: np.ndarray
+    metrics: Metrics
+
+
+@dataclass
 class GramSchmidtReport:
     q1: np.ndarray
     q2: np.ndarray
@@ -235,6 +244,50 @@ def covariance_eigen_analysis(x: np.ndarray, top_k: int = 5) -> Tuple[np.ndarray
     return eigvals[:k], ratios[:k]
 
 
+def pca_svd_reduce(
+    x_train: np.ndarray,
+    x_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    k: int,
+) -> PCASVDReport:
+    max_k = min(x_train.shape[0], x_train.shape[1])
+    if max_k < 1:
+        raise ValueError("PCA requires non-empty matrix.")
+    k_eff = max(1, min(k, max_k))
+
+    mean_vec = np.mean(x_train, axis=0, keepdims=True)
+    x_train_centered = x_train - mean_vec
+    x_test_centered = x_test - mean_vec
+
+    _, singular_values, vt = np.linalg.svd(x_train_centered, full_matrices=False)
+    vk = vt[:k_eff]
+
+    z_train = l2_normalize_rows(x_train_centered @ vk.T)
+    z_test = l2_normalize_rows(x_test_centered @ vk.T)
+
+    spam_c, ham_c = class_centroids(z_train, y_train)
+    y_pred = predict(z_test, spam_c, ham_c)
+    reduced_metrics = evaluate(y_test, y_pred)
+
+    variances = singular_values ** 2
+    var_total = float(np.sum(variances))
+    if var_total <= 1e-12:
+        ratios = np.zeros_like(singular_values)
+    else:
+        ratios = variances / var_total
+    top_ratios = ratios[:k_eff]
+    cumulative = np.cumsum(top_ratios)
+
+    return PCASVDReport(
+        k=k_eff,
+        singular_values=singular_values[:k_eff],
+        explained_variance_ratio=top_ratios,
+        cumulative_variance_ratio=cumulative,
+        metrics=reduced_metrics,
+    )
+
+
 def predict_single_text(model: VSMModel, text: str, temperature: float = 5.0) -> Tuple[str, float, float, float]:
     tokens = [tokenize(text)]
     x = compute_tf_idf(tokens, model.vocab, model.idf)
@@ -265,6 +318,7 @@ def run_experiment(
     test_ratio: float,
     min_df: int,
     seed: int,
+    pca_k: int = 5,
     input_text: str | None = None,
     interactive: bool = False,
 ) -> None:
@@ -299,6 +353,10 @@ def run_experiment(
     print(f"Emails total: {len(dataset.texts)}")
     print(f"Train/Test split: {len(y_train)}/{len(y_test)}")
     print(f"Vocabulary size: {len(vocab)}")
+    matrix_rank = int(np.linalg.matrix_rank(x_train))
+    nullity = int(x_train.shape[1] - matrix_rank)
+    print(f"Rank(X_train): {matrix_rank}")
+    print(f"Nullity(X_train): {nullity}  (d - rank)")
     print()
     print("Confusion Matrix [[TN, FP], [FN, TP]]:")
     print(metrics.confusion_matrix)
@@ -340,6 +398,29 @@ def run_experiment(
     print("  Covariance eigen-analysis (C = X^T X on train TF-IDF):")
     for i, (eig, ratio, cum) in enumerate(zip(top_eigs, top_ratios, cumulative), start=1):
         print(f"    lambda_{i}: {eig:.4f} | explained={ratio:.4f} | cumulative={cum:.4f}")
+
+    pca_report = pca_svd_reduce(x_train, x_test, y_train, y_test, k=pca_k)
+    print("  SVD + PCA reduced-space classification:")
+    print(f"    k (principal components): {pca_report.k}")
+    print("    top singular values and explained variance:")
+    for i, (sv, ratio, cum) in enumerate(
+        zip(
+            pca_report.singular_values,
+            pca_report.explained_variance_ratio,
+            pca_report.cumulative_variance_ratio,
+        ),
+        start=1,
+    ):
+        print(f"      sigma_{i}: {sv:.4f} | explained={ratio:.4f} | cumulative={cum:.4f}")
+    print("    reduced-space confusion matrix [[TN, FP], [FN, TP]]:")
+    print(f"    {pca_report.metrics.confusion_matrix}")
+    print(
+        "    reduced-space metrics: "
+        f"acc={pca_report.metrics.accuracy:.4f}, "
+        f"prec={pca_report.metrics.precision:.4f}, "
+        f"rec={pca_report.metrics.recall:.4f}, "
+        f"f1={pca_report.metrics.f1:.4f}"
+    )
 
     if input_text:
         label, confidence, spam_score, ham_score = predict_single_text(model, input_text)
@@ -398,6 +479,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-ratio", type=float, default=0.25, help="Test split ratio (0,1)")
     parser.add_argument("--min-df", type=int, default=1, help="Minimum document frequency")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--pca-k", type=int, default=5, help="Top principal components for SVD/PCA")
     parser.add_argument("--text", default=None, help="Single custom email text for prediction")
     parser.add_argument("--interactive", action="store_true", help="Interactive custom text prediction mode")
     return parser.parse_args()
@@ -409,12 +491,15 @@ def main() -> None:
         raise ValueError("--test-ratio must be in (0, 1).")
     if args.min_df < 1:
         raise ValueError("--min-df must be >= 1")
+    if args.pca_k < 1:
+        raise ValueError("--pca-k must be >= 1")
 
     run_experiment(
         data_path=args.data,
         test_ratio=args.test_ratio,
         min_df=args.min_df,
         seed=args.seed,
+        pca_k=args.pca_k,
         input_text=args.text,
         interactive=args.interactive,
     )

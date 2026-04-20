@@ -55,7 +55,7 @@ python3 src/vsm_spam_detector.py
 Optional arguments:
 
 ```bash
-python3 src/vsm_spam_detector.py --data data/email2.csv --test-ratio 0.25 --min-df 1 --seed 42
+python3 src/vsm_spam_detector.py --data data/email2.csv --test-ratio 0.25 --min-df 1 --seed 42 --pca-k 5
 ```
 
 Predict on your own single input text (while still printing dataset metrics):
@@ -78,6 +78,7 @@ Type `/quit` to exit.
 The script prints:
 
 - dataset and split info
+- rank and nullity of the training matrix (`X_train`)
 - confusion matrix `[[TN, FP], [FN, TP]]`
 - Accuracy, Precision, Recall, F1-score
 - most spam-indicative and ham-indicative terms
@@ -85,3 +86,4 @@ The script prints:
   - Gram-Schmidt orthogonalization on spam/ham centroid vectors
   - projection statistics on orthonormal basis vectors
   - covariance eigen-analysis (`C = X^T X`) with explained variance
+  - SVD/PCA reduced-space classification with singular values and explained variance

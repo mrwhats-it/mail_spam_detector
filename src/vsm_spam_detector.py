@@ -39,6 +39,15 @@ class VSMModel:
     ham_centroid: np.ndarray
 
 
+@dataclass
+class GramSchmidtReport:
+    q1: np.ndarray
+    q2: np.ndarray
+    coeff_ham_on_q1: float
+    residual_norm: float
+    centroid_cosine: float
+
+
 def tokenize(text: str) -> List[str]:
     return TOKEN_PATTERN.findall(text.lower())
 
@@ -188,6 +197,44 @@ def stable_softmax(logits: np.ndarray) -> np.ndarray:
     return exps / np.sum(exps)
 
 
+def gram_schmidt_two_vectors(v1: np.ndarray, v2: np.ndarray, eps: float = 1e-12) -> GramSchmidtReport:
+    n1 = np.linalg.norm(v1)
+    if n1 <= eps:
+        raise ValueError("Cannot run Gram-Schmidt with zero first vector.")
+    q1 = v1 / n1
+
+    coeff = float(v2 @ q1)
+    u2 = v2 - coeff * q1
+    residual_norm = float(np.linalg.norm(u2))
+    q2 = np.zeros_like(v2)
+    if residual_norm > eps:
+        q2 = u2 / residual_norm
+
+    centroid_cosine = float(v1 @ v2 / max(np.linalg.norm(v1) * np.linalg.norm(v2), eps))
+    return GramSchmidtReport(
+        q1=q1,
+        q2=q2,
+        coeff_ham_on_q1=coeff,
+        residual_norm=residual_norm,
+        centroid_cosine=centroid_cosine,
+    )
+
+
+def covariance_eigen_analysis(x: np.ndarray, top_k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+    cov = x.T @ x
+    eigvals = np.linalg.eigvalsh(cov)
+    eigvals = eigvals[::-1]
+    eigvals[eigvals < 0.0] = 0.0
+
+    total = float(np.sum(eigvals))
+    if total <= 1e-12:
+        ratios = np.zeros_like(eigvals)
+    else:
+        ratios = eigvals / total
+    k = min(top_k, len(eigvals))
+    return eigvals[:k], ratios[:k]
+
+
 def predict_single_text(model: VSMModel, text: str, temperature: float = 5.0) -> Tuple[str, float, float, float]:
     tokens = [tokenize(text)]
     x = compute_tf_idf(tokens, model.vocab, model.idf)
@@ -267,6 +314,32 @@ def run_experiment(
     print("Top ham-indicative terms:")
     for term, score in top_ham:
         print(f"  {term:<16} {score:.4f}")
+
+    gs = gram_schmidt_two_vectors(spam_centroid, ham_centroid)
+    test_proj_q1 = x_test @ gs.q1
+    test_proj_q2 = x_test @ gs.q2
+    spam_mask = y_test == 1
+    ham_mask = y_test == 0
+    spam_mean_q1 = float(np.mean(test_proj_q1[spam_mask])) if np.any(spam_mask) else 0.0
+    spam_mean_q2 = float(np.mean(test_proj_q2[spam_mask])) if np.any(spam_mask) else 0.0
+    ham_mean_q1 = float(np.mean(test_proj_q1[ham_mask])) if np.any(ham_mask) else 0.0
+    ham_mean_q2 = float(np.mean(test_proj_q2[ham_mask])) if np.any(ham_mask) else 0.0
+
+    top_eigs, top_ratios = covariance_eigen_analysis(x_train, top_k=5)
+    cumulative = np.cumsum(top_ratios)
+
+    print()
+    print("Linear Algebra Report:")
+    print("  Gram-Schmidt on class centroids:")
+    print(f"    cosine(c_spam, c_ham): {gs.centroid_cosine:.4f}")
+    print(f"    ham projection on q1  : {gs.coeff_ham_on_q1:.4f}")
+    print(f"    residual norm for q2  : {gs.residual_norm:.4f}")
+    print("    Mean test projections (q1, q2):")
+    print(f"      spam: ({spam_mean_q1:.4f}, {spam_mean_q2:.4f})")
+    print(f"      ham : ({ham_mean_q1:.4f}, {ham_mean_q2:.4f})")
+    print("  Covariance eigen-analysis (C = X^T X on train TF-IDF):")
+    for i, (eig, ratio, cum) in enumerate(zip(top_eigs, top_ratios, cumulative), start=1):
+        print(f"    lambda_{i}: {eig:.4f} | explained={ratio:.4f} | cumulative={cum:.4f}")
 
     if input_text:
         label, confidence, spam_score, ham_score = predict_single_text(model, input_text)

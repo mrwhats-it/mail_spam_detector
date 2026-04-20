@@ -32,7 +32,7 @@ Each email is transformed into a vector in a high-dimensional term space.
 This is a pure vector-space, linear-algebra-based classifier.
 
 ## Project Structure
-- `data/emails.csv` - small labeled dataset (spam/ham)
+- `data/email2.csv` - labeled dataset (spam/ham)
 - `src/vsm_spam_detector.py` - full implementation (NumPy)
 - `requirements.txt` - dependencies
 
@@ -71,6 +71,10 @@ The script prints:
 - confusion matrix `[[TN, FP], [FN, TP]]`
 - Accuracy, Precision, Recall, F1-score
 - most spam-indicative and ham-indicative terms
+- Linear Algebra Report:
+  - Gram-Schmidt orthogonalization on spam/ham centroid vectors
+  - projection statistics on orthonormal basis vectors
+  - covariance eigen-analysis (`C = X^T X`) with explained variance
 
 ## Notes for Project Report
 You can include these topics:
